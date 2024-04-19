@@ -2,6 +2,8 @@
 
 By Ashley Sheng (CS340)
 
+[Self Link to GitHub Repository](https://github.com/yelhsams/isle-type-inf)
+
 ## Motivation
 
 This project is inspired by this [issue](https://github.com/avanhatt/wasmtime/issues/91), reported by @mmcloughlin. Currently, ISLE implements a [simple unidirectional type-inference algorithm](https://github.com/bytecodealliance/wasmtime/blob/main/cranelift/isle/docs/language-reference.md#well-typed-rules-and-type-inference), which typechecks a pattern by propagating expected types provided by the constructor. At this point, the widths of each bitvector may not be known, since types in ISLE are polymorphic. 
@@ -18,7 +20,7 @@ Currently, the type inference system in ISLE relies on a second pass by the SMT 
 
 Our main goal is to remove “dynamic widths” from the solver and provide a mapping of possible type environment maps _before_ invoking the solver. I believe this project will provide a valuable opportunity to learn about type inference, apply SMT to a real use-case, and hack in Rust.
 
-I will branch off of Michael’s existing code from issue #91, linked above, but I will in isolation with the rest of VerISLE. Instead, I will work with directly the ISLE source file as an input, and its possible type mappings as an output.
+I will branch off of Michael’s existing code from issue #91, linked above, but I will work in isolation with the rest of VerISLE. Instead, I will work with directly the ISLE source file as an input, and its possible type mappings as an output.
 
 Foundational Goal:
 * Given a `Rule` and its related `Spec`s in the `ISLE::sema`, we wish to 1) reason about the widths of bitvector variables in a pattern and 2) generate SMT constraints matching those observations.
@@ -33,3 +35,4 @@ Stretch Goal:
 
 ## Sources
 * [Pardeshi 2023. VeriISLE: Verifying Instruction Selection in Cranelift](http://reports-archive.adm.cs.cmu.edu/anon/2023/CMU-CS-23-126.pdf)
+
