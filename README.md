@@ -36,3 +36,9 @@ Stretch Goal:
 ## Sources
 * [Pardeshi 2023. VeriISLE: Verifying Instruction Selection in Cranelift](http://reports-archive.adm.cs.cmu.edu/anon/2023/CMU-CS-23-126.pdf)
 
+
+
+We need to keep track of three types of constraints/nodes:
+ concrete (constant), var, bitvectors
+
+ This is because Constraints either assign concrete types to type variables or set them equal to other type variables

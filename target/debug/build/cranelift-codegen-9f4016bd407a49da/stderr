@@ -1,0 +1,18 @@
+Writing generated file: /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/settings.rs
+Writing generated file: /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/types.rs
+Writing generated file: /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/opcodes.rs
+Writing generated file: /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/clif_opt.isle
+Writing generated file: /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/clif_lower.isle
+Writing generated file: /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/inst_builder.rs
+Writing generated file: /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/settings-arm64.rs
+Rebuilding /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/isle_opt.rs
+Writing ISLE-generated Rust code to /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/isle_opt.rs
+Rebuilding /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/isle_x64.rs
+Writing ISLE-generated Rust code to /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/isle_x64.rs
+Rebuilding /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/isle_aarch64.rs
+Writing ISLE-generated Rust code to /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/isle_aarch64.rs
+Rebuilding /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/isle_s390x.rs
+Writing ISLE-generated Rust code to /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/isle_s390x.rs
+Rebuilding /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/isle_riscv64.rs
+Writing ISLE-generated Rust code to /Users/ashleysheng/cs340/isle-type-inf/target/debug/build/cranelift-codegen-9f4016bd407a49da/out/isle_riscv64.rs
+fatal: not a git repository (or any of the parent directories): .git

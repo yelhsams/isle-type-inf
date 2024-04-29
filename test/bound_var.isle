@@ -1,0 +1,15 @@
+(type u32 (primitive u32))
+(type u16 (primitive u16))
+
+(decl A (u32 u32) u32)
+
+(spec (A x y) (provide (= x result)))
+(instantiate A
+    ((args (bv 32) (bv 64)) (ret (bv 32)) (canon (bv 64)))
+    ((args (bv 32) (bv 32)) (ret (bv 32)) (canon (bv 32)))
+    ((args (bv 32) (bv 16)) (ret (bv 32)) (canon (bv 16)))
+    ((args (bv 32) (bv 64)) (ret (bv 32)) (canon (bv 8)))
+)
+
+(rule name_1 1 (A x y) x)
+(rule name_0 0 (A 0 _) 0)
