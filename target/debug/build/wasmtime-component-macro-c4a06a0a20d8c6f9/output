@@ -1,0 +1,2 @@
+cargo:rerun-if-changed=build.rs
+cargo:rustc-env=DEBUG_OUTPUT_DIR=/Users/ashleysheng/cs340/isle-type-inf/target/debug/build/wasmtime-component-macro-c4a06a0a20d8c6f9/out
