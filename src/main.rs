@@ -1,8 +1,9 @@
 extern crate cranelift_isle;
 
+use cranelift_isle::ast::{self, Def, Ident};
 use cranelift_isle::lexer::{Lexer, Pos};
 use cranelift_isle::parser::parse;
-use cranelift_isle::sema;
+use cranelift_isle::sema::{self, Term};
 use cranelift_isle::sema::{Pattern, RuleId, TermEnv, TermId, TypeEnv, VarId};
 use easy_smt::SExprData;
 use easy_smt::{Response, SExpr};
@@ -10,10 +11,12 @@ use itertools::Itertools;
 use std::collections::{HashMap, HashSet};
 use std::env;
 use std::hash::Hash;
+use std::path::PathBuf;
 use strum::IntoEnumIterator;
 use strum_macros::{EnumIter, FromRepr};
 use type_inf::annotations::parse_annotations;
 use type_inf::annotations::AnnotationEnv;
+use type_inf::build_clif_lower_isle;
 use type_inf::{FLAGS_WIDTH, REG_WIDTH};
 
 use type_inf::termname::pattern_contains_termname;
@@ -166,14 +169,14 @@ pub fn type_rules_with_term_and_types(
             &types,
             concrete,
         ) {
-            // Uncomment for debugging
-            for a in &s.annotation_infos {
-                println!("{}", a.term);
-                for (var, type_var) in &a.var_to_type_var {
-                    println!("{}: {:#?}", var, s.type_var_to_type[type_var]);
-                }
-                println!();
-            }
+            // // Uncomment for debugging
+            // for a in &s.annotation_infos {
+            //     println!("{}", a.term);
+            //     for (var, type_var) in &a.var_to_type_var {
+            //         println!("{}: {:#?}", var, s.type_var_to_type[type_var]);
+            //     }
+            //     println!();
+            // }
             solutions.insert(rule.id, s);
         }
     }
@@ -1964,7 +1967,6 @@ impl TypeSolver {
     }
 
     fn solve(&mut self) -> HashMap<u32, annotation_ir::Type> {
-        // TODO(mbm): return result rather than assert
         let response = self.smt.check().unwrap();
         assert_eq!(response, Response::Sat);
 
@@ -2257,8 +2259,17 @@ fn main() {
     let args: Vec<String> = env::args().collect();
     let file_name = &args[1];
 
+    let cur_dir = env::current_dir().expect("Can't access current working directory");
+    let clif_isle = cur_dir.join("./test").join("inst_specs.isle");
+    let prelude_isle = cur_dir.join("./test").join("prelude.isle");
+    let prelude_lower_isle = cur_dir.join("./test").join("prelude_lower.isle");
+    let mut inputs = vec![prelude_isle, prelude_lower_isle, clif_isle];
+    inputs.push(build_clif_lower_isle());
+    inputs.push(PathBuf::from(file_name));
+
     // Parse AST.
-    let ast = parse(Lexer::from_files(&[file_name]).unwrap()).expect("should parse");
+    // TODO(ashley): figure out a work around for the meta crate to generate clif lower rules. Can't stand alone add prelude.
+    let ast = parse(Lexer::from_files(&inputs).unwrap()).expect("should parse");
     // dbg!(&ast);
     // Type Environment
     let mut tyenv = TypeEnv::from_ast(&ast).expect("should not have type-definition errors");
@@ -2268,11 +2279,26 @@ fn main() {
         TermEnv::from_ast(&mut tyenv, &ast, false).expect("should not have type-definition errors");
     // dbg!(&termenv);
 
+    dbg!(&ast);
     let annotation_env = parse_annotations(&ast, &termenv, &tyenv);
+
+    // let mut rule_names = ast
+    //     .defs
+    //     .iter()
+    //     .filter_map(|x| {
+    //         if let Def::Rule(value) = x {
+    //             Some(&value.name)
+    //         } else {
+    //             None
+    //         }
+    //     })
+    //     .map(|x| x.clone().expect("Isn't Ident").0.to_owned())
+    //     .collect::<Vec<_>>();
+    // rule_names.dedup();
 
     let config = Config {
         term: "A".to_string(),
-        names: Some(vec!["name_1".to_string(), "name_0".to_string()]),
+        names: None,
     };
 
     // Get the types/widths for this particular term
@@ -2282,7 +2308,7 @@ fn main() {
         .expect(format!("Missing term width for {}", config.term).as_str())
         .clone();
 
-    dbg!(&types);
+    // dbg!(&types);
     for type_instantiation in types {
         let type_sols = type_rules_with_term_and_types(
             &termenv,
@@ -2292,6 +2318,18 @@ fn main() {
             &type_instantiation,
             &None,
         );
-        // dbg!(type_sols);
+
+        for rules in &type_sols {
+            for annotation in &rules.1.annotation_infos {
+                println!("\nTyping Rule for {}", annotation.term);
+                for var in &annotation.var_to_type_var {
+                    println!(
+                        "{}: {:?}",
+                        var.0,
+                        rules.1.type_var_to_type.get(var.1).unwrap()
+                    );
+                }
+            }
+        }
     }
 }

@@ -9,6 +9,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
 
 [[package]]
+name = "cranelift-codegen-meta"
+version = "0.101.0"
+source = "git+https://github.com/avanhatt/wasmtime.git#f60184b362a2d01e6afc9c7204191580dca95c71"
+dependencies = [
+ "cranelift-codegen-shared",
+]
+
+[[package]]
+name = "cranelift-codegen-shared"
+version = "0.101.0"
+source = "git+https://github.com/avanhatt/wasmtime.git#f60184b362a2d01e6afc9c7204191580dca95c71"
+
+[[package]]
 name = "cranelift-isle"
 version = "0.101.0"
 source = "git+https://github.com/avanhatt/wasmtime.git#f60184b362a2d01e6afc9c7204191580dca95c71"
@@ -121,6 +134,7 @@ dependencies = [
 name = "type-inf"
 version = "0.1.0"
 dependencies = [
+ "cranelift-codegen-meta",
  "cranelift-isle",
  "easy-smt",
  "itertools",

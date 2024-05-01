@@ -1,7 +1,7 @@
-(type u32 (primitive u32))
-(type u16 (primitive u16))
+(model Value (type (bv)))
+(type Value (primitive Value))
 
-(decl A (u32 u32) u32)
+(decl A (Value Value) Value)
 
 (spec (A x y) (provide (= x result)))
 (instantiate A
@@ -11,5 +11,10 @@
     ((args (bv 32) (bv 64)) (ret (bv 32)) (canon (bv 8)))
 )
 
-(rule name_1 1 (A x y) x)
-(rule name_0 0 (A 0 _) 0)
+(rule (A x y) x)
+(rule (A 0 _) 0)
+
+;; (32, 64) -> 32
+
+;; Harder test cases :: veri engine -- broken, 'extend', small_rotr
+;; include the prelude 

@@ -9,6 +9,7 @@ edition = "2021"
 [dependencies]
 cranelift-isle = { git = "https://github.com/avanhatt/wasmtime.git" }
 veri_ir = { git = "https://github.com/avanhatt/wasmtime.git" }
+cranelift-codegen-meta = { git = "https://github.com/avanhatt/wasmtime.git" }
 
 easy-smt = { git = "https://github.com/elliottt/easy-smt.git" }
 itertools = "0.12.1"
