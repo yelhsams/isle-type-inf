@@ -1,10 +1,10 @@
 extern crate cranelift_isle;
 
-use cranelift_isle::ast::{self, Def, Ident};
-use cranelift_isle::lexer::{Lexer, Pos};
+use cranelift_isle::lexer::Lexer;
 use cranelift_isle::parser::parse;
-use cranelift_isle::sema::{self, Term};
-use cranelift_isle::sema::{Pattern, RuleId, TermEnv, TermId, TypeEnv, VarId};
+use cranelift_isle::sema::{self};
+use cranelift_isle::sema::{Pattern, TermEnv, TermId, TypeEnv, VarId};
+use easy_smt::Context;
 use easy_smt::SExprData;
 use easy_smt::{Response, SExpr};
 use itertools::Itertools;
@@ -20,7 +20,7 @@ use type_inf::build_clif_lower_isle;
 use type_inf::{FLAGS_WIDTH, REG_WIDTH};
 
 use type_inf::termname::pattern_contains_termname;
-use veri_ir::{annotation_ir, ConcreteTest, Expr, TermSignature, Type, TypeContext};
+use veri_ir::{annotation_ir, BinaryOp, ConcreteTest, Expr, TermSignature, Type};
 
 /* ----- STRUCTS FOR RECURSIVE RULE PARSING, TYPE CONVERSION ----- */
 #[derive(Clone, Debug)]
@@ -48,6 +48,10 @@ struct RuleParseTree {
 // Constraints either assign concrete types to type variables
 // or set them equal to other type variables
 enum TypeExpr {
+    // add a case for symbolic bvs?
+    // lhs = rhs = SExpr, assert that the rhs = lhs
+    // create a new TypeExpr(symbolic, sexpr)
+    Symbolic(Vec<u32>, Vec<u32>),
     Concrete(u32, annotation_ir::Type),
     Variable(u32, u32),
     // The type variable of the first arg is equal to the value of the second
@@ -264,6 +268,8 @@ fn type_annotations_using_rule<'a>(
                 &parse_tree.var_constraints,
                 &parse_tree.bv_constraints,
                 &mut parse_tree.type_var_to_val_map,
+                &lhs_expr,
+                &rhs_expr,
                 // Some(&parse_tree.ty_vars),
             );
             // dbg!(&solution);
@@ -1462,16 +1468,31 @@ fn add_annotation_constraints(
             let t = tree.next_type_var;
             tree.next_type_var += 1;
 
+            // let widths: Vec<SExpr> = xs
+            //     .iter()
+            //     .map(|x| self.get_expr_width_var(&x).unwrap().clone())
+            //     .collect();
+            // let sum = self.smt.plus_many(widths);
+            // self.width_assumptions
+            //     .push(self.smt.eq(width.unwrap(), sum));
+
+            let mut sum_bvs = vec![];
+
             let mut exprs = vec![];
             for x in xs {
                 let (xe, xt) = add_annotation_constraints(x, tree, annotation_info);
                 tree.bv_constraints
                     .insert(TypeExpr::Concrete(xt, annotation_ir::Type::BitVector));
+
+                // add each bv to the sum_bv
+                sum_bvs.push(xt);
+
                 exprs.push(xe);
             }
             tree.bv_constraints
                 .insert(TypeExpr::Concrete(t, annotation_ir::Type::BitVector));
-
+            tree.concrete_constraints
+                .insert(TypeExpr::Symbolic(sum_bvs, vec![t]));
             tree.next_type_var += 1;
 
             (veri_ir::Expr::BVConcat(exprs), t)
@@ -1930,6 +1951,8 @@ fn solve_constraints(
     var: &HashSet<TypeExpr>,
     bv: &HashSet<TypeExpr>,
     vals: &mut HashMap<u32, i128>,
+    lhs_expr: &Expr,
+    rhs_expr: &Expr,
     //ty_vars: Option<&HashMap<veri_ir::Expr, u32>>,
 ) -> (HashMap<u32, annotation_ir::Type>, HashMap<u32, u32>) {
     // Setup
@@ -2041,6 +2064,7 @@ impl TypeSolver {
             TypeExpr::Concrete(v, ty) => self.concrete(*v, ty),
             TypeExpr::Variable(u, v) => self.variable(*u, *v),
             TypeExpr::WidthInt(v, w) => self.width_int(*v, *w),
+            TypeExpr::Symbolic(l, r) => self.symbolic(l.clone(), r.clone()),
         }
     }
 
@@ -2105,6 +2129,24 @@ impl TypeSolver {
         self.assert_type_discriminant(&bitvector_type, TypeDiscriminant::BitVector);
         self.assert_type_discriminant(&width_type, TypeDiscriminant::Int);
         self.assert_options_equal(&bitvector_type.bitvector_width, &width_type.integer_value)
+    }
+
+    fn symbolic(&mut self, l: Vec<u32>, r: Vec<u32>) {
+        // get the expressions of each bv we want to add
+        let l_widths: Vec<SExpr> = l
+            .iter()
+            .map(|s| self.get_symbolic_type(*s).bitvector_width.value.expr)
+            .collect();
+        // sum them together
+        let l_sum = self.smt.plus_many(l_widths);
+
+        // same for rhs
+        let r_widths: Vec<SExpr> = r
+            .iter()
+            .map(|s| self.get_symbolic_type(*s).bitvector_width.value.expr)
+            .collect();
+        let r_sum = self.smt.plus_many(r_widths);
+        self.smt.assert(self.smt.eq(l_sum, r_sum)).unwrap();
     }
 
     fn assert_type_discriminant(&mut self, symbolic_type: &SymbolicType, disc: TypeDiscriminant) {
@@ -2254,21 +2296,113 @@ impl SymbolicType {
     }
 }
 
+// fn display_isle_pattern(
+//     termenv: &TermEnv,
+//     typeenv: &TypeEnv,
+//     vars: &Vec<(String, String)>,
+//     rule: &sema::Rule,
+//     pat: &Pattern,
+// ) -> SExpr {
+//     let mut to_sexpr = |p| display_isle_pattern(termenv, typeenv, vars, rule, p);
+
+//     match pat {
+//         sema::Pattern::Term(_, term_id, args) => {
+//             let sym = termenv.terms[term_id.index()].name;
+//             let name = typeenv.syms[sym.index()].clone();
+
+//             let mut sexprs = args.iter().map(|a| to_sexpr(a)).collect::<Vec<SExpr>>();
+
+//             sexprs.insert(0, self.smt.atom(name));
+//             self.smt.list(sexprs)
+//         }
+//         sema::Pattern::Var(_, var_id) => {
+//             let sym = rule.vars[var_id.index()].name;
+//             let ident = typeenv.syms[sym.index()].clone();
+//             let smt_ident_prefix = format!("{}__clif{}__", ident, var_id.index());
+
+//             let var = display_var_from_smt_prefix(vars, &ident, &smt_ident_prefix);
+//             self.smt.atom(var)
+//         }
+//         sema::Pattern::BindPattern(_, var_id, subpat) => {
+//             let sym = rule.vars[var_id.index()].name;
+//             let ident = &typeenv.syms[sym.index()];
+//             let smt_ident_prefix = format!("{}__clif{}__", ident, var_id.index(),);
+//             let subpat_node = to_sexpr(subpat);
+
+//             let var = display_var_from_smt_prefix(vars, ident, &smt_ident_prefix);
+
+//             // Special case: elide bind patterns to wildcars
+//             if matches!(**subpat, sema::Pattern::Wildcard(_)) {
+//                 self.smt.atom(var)
+//             } else {
+//                 self.smt
+//                     .list(vec![self.smt.atom(var), self.smt.atom("@"), subpat_node])
+//             }
+//         }
+//         sema::Pattern::Wildcard(_) => self.smt.list(vec![self.smt.atom("_")]),
+//         sema::Pattern::ConstPrim(_, sym) => {
+//             let name = typeenv.syms[sym.index()].clone();
+//             self.smt.list(vec![self.smt.atom(name)])
+//         }
+//         sema::Pattern::ConstInt(_, num) => {
+//             let _smt_name_prefix = format!("{}__", num);
+//             // TODO: look up BV vs int
+//             self.smt.list(vec![self.smt.atom(num.to_string())])
+//         }
+//         sema::Pattern::And(_, subpats) => {
+//             let mut sexprs = subpats.iter().map(|a| to_sexpr(a)).collect::<Vec<SExpr>>();
+
+//             sexprs.insert(0, self.smt.atom("and"));
+//             self.smt.list(sexprs)
+//         }
+//     }
+// }
+
+// fn display_var_from_smt_prefix(vars: &Vec<(String, String)>, ident: &str, prefix: &str) -> String {
+//     let matches: Vec<&(String, String)> =
+//         vars.iter().filter(|(v, _)| v.starts_with(prefix)).collect();
+//     if matches.len() == 0 {
+//         println!("Can't find match for: {}", prefix);
+//         println!("{:?}", vars);
+//         panic!();
+//     } else if matches.len() == 3 {
+//         assert!(
+//             self.dynwidths,
+//             "Only expect multiple matches with dynamic widths"
+//         );
+//         for (name, model) in matches {
+//             if name.contains("narrow") {
+//                 return format!("[{}|{}]", self.smt.display(self.smt.atom(ident)), model);
+//             }
+//         }
+//         panic!("narrow not found");
+//     } else if matches.len() == 1 {
+//         let model = &matches.first().unwrap().1;
+//         format!("[{}|{}]", self.smt.display(self.smt.atom(ident)), model)
+//     } else {
+//         panic!("Unexpected number of matches!")
+//     }
+// }
 fn main() {
     // Take in an ISLE file name.
     let args: Vec<String> = env::args().collect();
     let file_name = &args[1];
 
     let cur_dir = env::current_dir().expect("Can't access current working directory");
-    let clif_isle = cur_dir.join("./test").join("inst_specs.isle");
-    let prelude_isle = cur_dir.join("./test").join("prelude.isle");
-    let prelude_lower_isle = cur_dir.join("./test").join("prelude_lower.isle");
+    let clif_isle = cur_dir.join("./ref").join("inst_specs.isle");
+    let prelude_isle = cur_dir.join("./ref").join("prelude.isle");
+    let prelude_lower_isle = cur_dir.join("./ref").join("prelude_lower.isle");
     let mut inputs = vec![prelude_isle, prelude_lower_isle, clif_isle];
+
+    // DO NOT include these for broken tests
+    // inputs.push(cur_dir.join("./ref/aarch64").join("inst.isle"));
+    // inputs.push(cur_dir.join("./ref/aarch64").join("inst_specs.isle"));
+    // inputs.push(cur_dir.join("./ref/aarch64").join("lower.isle"));
+
     inputs.push(build_clif_lower_isle());
     inputs.push(PathBuf::from(file_name));
 
     // Parse AST.
-    // TODO(ashley): figure out a work around for the meta crate to generate clif lower rules. Can't stand alone add prelude.
     let ast = parse(Lexer::from_files(&inputs).unwrap()).expect("should parse");
     // dbg!(&ast);
     // Type Environment
@@ -2279,7 +2413,6 @@ fn main() {
         TermEnv::from_ast(&mut tyenv, &ast, false).expect("should not have type-definition errors");
     // dbg!(&termenv);
 
-    dbg!(&ast);
     let annotation_env = parse_annotations(&ast, &termenv, &tyenv);
 
     // let mut rule_names = ast
@@ -2297,8 +2430,8 @@ fn main() {
     // rule_names.dedup();
 
     let config = Config {
-        term: "A".to_string(),
-        names: None,
+        term: "uextend".to_string(),
+        names: None, //Some(vec!["extend".to_string()]),
     };
 
     // Get the types/widths for this particular term

@@ -1,6 +1,3 @@
-(model Value (type (bv)))
-(type Value (primitive Value))
-
 (decl A (Value Value) Value)
 
 (spec (A x y) (provide (= x result)))
@@ -17,4 +14,4 @@
 ;; (32, 64) -> 32
 
 ;; Harder test cases :: veri engine -- broken, 'extend', small_rotr
-;; include the prelude 
+;; include the prelude -- check
