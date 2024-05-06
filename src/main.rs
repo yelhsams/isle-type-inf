@@ -1,10 +1,10 @@
 extern crate cranelift_isle;
 
+use clap::{ArgAction, Parser};
 use cranelift_isle::lexer::Lexer;
 use cranelift_isle::parser::parse;
 use cranelift_isle::sema::{self};
 use cranelift_isle::sema::{Pattern, TermEnv, TermId, TypeEnv, VarId};
-use easy_smt::Context;
 use easy_smt::SExprData;
 use easy_smt::{Response, SExpr};
 use itertools::Itertools;
@@ -20,7 +20,7 @@ use type_inf::build_clif_lower_isle;
 use type_inf::{FLAGS_WIDTH, REG_WIDTH};
 
 use type_inf::termname::pattern_contains_termname;
-use veri_ir::{annotation_ir, BinaryOp, ConcreteTest, Expr, TermSignature, Type};
+use veri_ir::{annotation_ir, ConcreteTest, Expr, TermSignature, Type};
 
 /* ----- STRUCTS FOR RECURSIVE RULE PARSING, TYPE CONVERSION ----- */
 #[derive(Clone, Debug)]
@@ -48,9 +48,7 @@ struct RuleParseTree {
 // Constraints either assign concrete types to type variables
 // or set them equal to other type variables
 enum TypeExpr {
-    // add a case for symbolic bvs?
-    // lhs = rhs = SExpr, assert that the rhs = lhs
-    // create a new TypeExpr(symbolic, sexpr)
+    // Symbolic Sum for now. This only checks if the sum of bv widths of the lhs match the rhs.
     Symbolic(Vec<u32>, Vec<u32>),
     Concrete(u32, annotation_ir::Type),
     Variable(u32, u32),
@@ -101,6 +99,30 @@ pub enum TypeVarConstruct {
     And,
 }
 
+#[derive(Parser)]
+#[clap(about, version, author)]
+struct Args {
+    /// Sets the input file
+    #[clap(short, long)]
+    input: Option<String>,
+
+    /// Which LHS root to verify
+    #[clap(short, long, default_value = "lower")]
+    term: String,
+
+    /// Which named rule to verify
+    #[clap(long)]
+    names: Option<Vec<String>>,
+
+    /// Don't use the prelude ISLE files
+    #[clap(short, long, action=ArgAction::SetTrue)]
+    noprelude: bool,
+
+    /// Include the aarch64 files
+    #[clap(short, long, action=ArgAction::SetTrue)]
+    aarch64: bool,
+}
+
 pub struct Config {
     /// Which LHS root to verify
     pub term: String,
@@ -118,6 +140,17 @@ fn convert_type(aty: &annotation_ir::Type) -> veri_ir::Type {
         annotation_ir::Type::Int => veri_ir::Type::Int,
         annotation_ir::Type::Bool => veri_ir::Type::Bool,
         annotation_ir::Type::Poly(_) => veri_ir::Type::BitVector(None),
+    }
+}
+
+fn type_to_num(aty: &annotation_ir::Type) -> String {
+    match aty {
+        annotation_ir::Type::BitVectorUnknown(..) => "bvunk".to_string(),
+        annotation_ir::Type::BitVector => "bv".to_string(),
+        annotation_ir::Type::BitVectorWithWidth(w) => format!("bv{}", &w),
+        annotation_ir::Type::Int => "int".to_string(),
+        annotation_ir::Type::Bool => "bool".to_string(),
+        annotation_ir::Type::Poly(_) => "poly".to_string(),
     }
 }
 
@@ -194,7 +227,7 @@ fn type_annotations_using_rule<'a>(
     termenv: &'a TermEnv,
     term: &String,
     types: &TermSignature,
-    concrete: &'a Option<ConcreteTest>,
+    _concrete: &'a Option<ConcreteTest>,
 ) -> Option<RuleSemantics> {
     let mut parse_tree = RuleParseTree {
         varid_to_type_var_map: HashMap::new(),
@@ -209,8 +242,59 @@ fn type_annotations_using_rule<'a>(
         assumptions: vec![],
         rhs_assertions: vec![],
     };
-
     let mut annotation_infos = vec![];
+    if !rule.iflets.is_empty() {
+        print!("\n\tif-lets:");
+        for iflet in &rule.iflets {
+            let iflet_lhs = &mut create_parse_tree_pattern(
+                rule,
+                &iflet.lhs,
+                &mut parse_tree,
+                typeenv,
+                termenv,
+                term,
+                types,
+            );
+            let iflet_rhs =
+                &mut create_parse_tree_expr(rule, &iflet.rhs, &mut parse_tree, typeenv, termenv);
+
+            let iflet_lhs_expr = add_rule_constraints(
+                &mut parse_tree,
+                iflet_lhs,
+                termenv,
+                typeenv,
+                annotation_env,
+                &mut annotation_infos,
+                false,
+            );
+            if iflet_lhs_expr.is_none() {
+                return None;
+            }
+
+            let iflet_rhs_expr = add_rule_constraints(
+                &mut parse_tree,
+                iflet_rhs,
+                termenv,
+                typeenv,
+                annotation_env,
+                &mut annotation_infos,
+                false,
+            );
+            if iflet_rhs_expr.is_none() {
+                return None;
+            }
+            parse_tree
+                .var_constraints
+                .insert(TypeExpr::Variable(iflet_lhs.type_var, iflet_rhs.type_var));
+            parse_tree.assumptions.push(veri_ir::Expr::Binary(
+                veri_ir::BinaryOp::Eq,
+                Box::new(iflet_lhs_expr.unwrap()),
+                Box::new(iflet_rhs_expr.unwrap()),
+            ));
+        }
+        print!("\n");
+    }
+
     let lhs = &mut create_parse_tree_pattern(
         rule,
         // Hack for now: typeid not used
@@ -263,7 +347,7 @@ fn type_annotations_using_rule<'a>(
                 .insert(TypeExpr::Variable(lhs.type_var, rhs.type_var));
 
             // NOTE: This is where SMT Solver should be called
-            let (solution, bv_unknown_width_sets) = solve_constraints(
+            let (solution, _bv_unknown_width_sets) = solve_constraints(
                 &parse_tree.concrete_constraints,
                 &parse_tree.var_constraints,
                 &parse_tree.bv_constraints,
@@ -285,13 +369,14 @@ fn type_annotations_using_rule<'a>(
                 termenv,
                 typeenv,
                 rule,
-                &mut annotation_infos.clone(),
+                &annotation_infos,
                 &solution,
                 &Pattern::Term(
                     cranelift_isle::sema::TypeId(0),
                     rule.root_term,
                     rule.args.clone(),
                 ),
+                None,
             );
             println!("{}", solver.smt.display(lhs));
 
@@ -300,9 +385,10 @@ fn type_annotations_using_rule<'a>(
                 termenv,
                 typeenv,
                 rule,
-                &mut annotation_infos.clone(),
+                &annotation_infos,
                 &solution,
                 &rule.rhs,
+                None,
             );
             println!("{}", solver.smt.display(rhs));
 
@@ -1982,8 +2068,8 @@ fn solve_constraints(
     var: &HashSet<TypeExpr>,
     bv: &HashSet<TypeExpr>,
     vals: &mut HashMap<u32, i128>,
-    lhs_expr: &Expr,
-    rhs_expr: &Expr,
+    _lhs_expr: &Expr,
+    _rhs_expr: &Expr,
     //ty_vars: Option<&HashMap<veri_ir::Expr, u32>>,
 ) -> (HashMap<u32, annotation_ir::Type>, HashMap<u32, u32>) {
     // Setup
@@ -2095,7 +2181,7 @@ impl TypeSolver {
             TypeExpr::Concrete(v, ty) => self.concrete(*v, ty),
             TypeExpr::Variable(u, v) => self.variable(*u, *v),
             TypeExpr::WidthInt(v, w) => self.width_int(*v, *w),
-            TypeExpr::Symbolic(l, r) => self.symbolic(l.clone(), r.clone()),
+            TypeExpr::Symbolic(l, r) => self.symbolic_sum(l.clone(), r.clone()),
         }
     }
 
@@ -2162,7 +2248,7 @@ impl TypeSolver {
         self.assert_options_equal(&bitvector_type.bitvector_width, &width_type.integer_value)
     }
 
-    fn symbolic(&mut self, l: Vec<u32>, r: Vec<u32>) {
+    fn symbolic_sum(&mut self, l: Vec<u32>, r: Vec<u32>) {
         // get the expressions of each bv we want to add
         let l_widths: Vec<SExpr> = l
             .iter()
@@ -2220,43 +2306,44 @@ impl TypeSolver {
         termenv: &TermEnv,
         typeenv: &TypeEnv,
         rule: &sema::Rule,
-        annotation_infos: &mut Vec<AnnotationTypeInfo>,
+        annotation_infos: &Vec<AnnotationTypeInfo>,
         type_sols: &HashMap<u32, veri_ir::annotation_ir::Type>,
         pat: &Pattern,
+        parent_term: Option<&AnnotationTypeInfo>,
     ) -> SExpr {
         let mut to_sexpr =
-            |p| self.display_isle_pattern(termenv, typeenv, rule, annotation_infos, type_sols, p);
+            |ai, p, pt| self.display_isle_pattern(termenv, typeenv, rule, ai, type_sols, p, pt);
 
+        let mut anno = annotation_infos.clone();
         match pat {
             sema::Pattern::Term(_, term_id, args) => {
                 let sym = termenv.terms[term_id.index()].name;
                 let name = typeenv.syms[sym.index()].clone();
-
-                let mut sexprs: Vec<SExpr> =
-                    args.iter().map(|a| to_sexpr(a)).collect::<Vec<SExpr>>();
 
                 let matches: Vec<&AnnotationTypeInfo> = annotation_infos
                     .iter()
                     .filter(|t| t.term.starts_with(&name))
                     .collect();
 
-                let mut var = "oops".to_string();
+                let mut var = " ".to_string();
                 if matches.len() == 0 {
                     println!("Can't find match for: {}", name);
                     panic!();
                 } else if matches.len() >= 1 {
                     var = format!(
-                        "[{:?}|{}]",
-                        type_sols
-                            .get(
-                                &matches
-                                    .first()
-                                    .unwrap()
-                                    .var_to_type_var
-                                    .get("result")
-                                    .unwrap()
-                            )
-                            .unwrap(),
+                        "[{}|{}]",
+                        type_to_num(
+                            type_sols
+                                .get(
+                                    &matches
+                                        .first()
+                                        .unwrap()
+                                        .var_to_type_var
+                                        .get("result")
+                                        .unwrap()
+                                )
+                                .unwrap()
+                        ),
                         name
                     );
                     if matches.len() > 1 {
@@ -2264,30 +2351,73 @@ impl TypeSolver {
                             .iter()
                             .position(|t| t.term == matches.first().unwrap().term)
                             .unwrap();
-                        annotation_infos.remove(index);
+                        anno.remove(index);
                     }
                 }
+
+                let mut sexprs: Vec<SExpr> = args
+                    .iter()
+                    .map(|a| to_sexpr(&anno, a, matches.first().copied()))
+                    .collect::<Vec<SExpr>>();
 
                 sexprs.insert(0, self.smt.atom(var));
                 self.smt.list(sexprs)
             }
+
             sema::Pattern::Var(_, var_id) => {
                 let sym = rule.vars[var_id.index()].name;
                 let ident = typeenv.syms[sym.index()].clone();
 
-                self.smt.atom(ident)
+                let mut var = " ".to_string();
+                match parent_term {
+                    Some(value) => {
+                        var = format!(
+                            "[{}|{}]",
+                            type_to_num(
+                                type_sols
+                                    .get(&value.var_to_type_var.get(&ident).unwrap())
+                                    .unwrap()
+                            ),
+                            ident
+                        );
+                    }
+                    None => print!("Not found!"),
+                }
+
+                self.smt.atom(var)
             }
             sema::Pattern::BindPattern(_, var_id, subpat) => {
                 let sym = rule.vars[var_id.index()].name;
                 let ident = &typeenv.syms[sym.index()];
-                let subpat_node = to_sexpr(subpat);
+                let subpat_node = to_sexpr(annotation_infos, subpat, parent_term);
 
+                let mut var = " ".to_string();
+                match parent_term {
+                    Some(value) => match value.var_to_type_var.get(ident) {
+                        Some(ty) => {
+                            var =
+                                format!("[{}|{}]", type_to_num(type_sols.get(ty).unwrap()), ident);
+                        }
+                        None => {
+                            var = format!(
+                                "[{}|{}]",
+                                type_to_num(
+                                    type_sols
+                                        .get(&value.var_to_type_var.get("arg").unwrap())
+                                        .unwrap()
+                                ),
+                                ident
+                            );
+                        }
+                    },
+                    None => print!("Not found!"),
+                }
                 // Special case: elide bind patterns to wildcars
                 if matches!(**subpat, sema::Pattern::Wildcard(_)) {
-                    self.smt.atom(ident)
+                    self.smt.atom(&var)
                 } else {
                     self.smt
-                        .list(vec![self.smt.atom(ident), self.smt.atom("@"), subpat_node])
+                        .list(vec![self.smt.atom(&var), self.smt.atom("@"), subpat_node])
                 }
             }
             sema::Pattern::Wildcard(_) => self.smt.list(vec![self.smt.atom("_")]),
@@ -2301,7 +2431,10 @@ impl TypeSolver {
                 self.smt.list(vec![self.smt.atom(num.to_string())])
             }
             sema::Pattern::And(_, subpats) => {
-                let mut sexprs = subpats.iter().map(|a| to_sexpr(a)).collect::<Vec<SExpr>>();
+                let mut sexprs = subpats
+                    .iter()
+                    .map(|a| to_sexpr(annotation_infos, a, parent_term))
+                    .collect::<Vec<SExpr>>();
 
                 sexprs.insert(0, self.smt.atom("and"));
                 self.smt.list(sexprs)
@@ -2313,19 +2446,20 @@ impl TypeSolver {
         termenv: &TermEnv,
         typeenv: &TypeEnv,
         rule: &sema::Rule,
-        annotation_infos: &mut Vec<AnnotationTypeInfo>,
+        annotation_infos: &Vec<AnnotationTypeInfo>,
         type_sols: &HashMap<u32, veri_ir::annotation_ir::Type>,
         expr: &sema::Expr,
+        parent_term: Option<&AnnotationTypeInfo>,
     ) -> SExpr {
-        let mut to_sexpr =
-            |e| self.display_isle_expr(termenv, typeenv, rule, annotation_infos, type_sols, e);
+        let to_sexpr =
+            |ai, e, pt| self.display_isle_expr(termenv, typeenv, rule, ai, type_sols, e, pt);
+
+        let mut anno = annotation_infos.clone();
 
         match expr {
             sema::Expr::Term(_, term_id, args) => {
                 let sym = termenv.terms[term_id.index()].name;
                 let name = typeenv.syms[sym.index()].clone();
-
-                let mut sexprs = args.iter().map(|a| to_sexpr(a)).collect::<Vec<SExpr>>();
 
                 let matches: Vec<&AnnotationTypeInfo> = annotation_infos
                     .iter()
@@ -2338,17 +2472,19 @@ impl TypeSolver {
                     panic!();
                 } else if matches.len() >= 1 {
                     var = format!(
-                        "[{:?}|{}]",
-                        type_sols
-                            .get(
-                                &matches
-                                    .first()
-                                    .unwrap()
-                                    .var_to_type_var
-                                    .get("result")
-                                    .unwrap()
-                            )
-                            .unwrap(),
+                        "[{}|{}]",
+                        type_to_num(
+                            type_sols
+                                .get(
+                                    &matches
+                                        .first()
+                                        .unwrap()
+                                        .var_to_type_var
+                                        .get("result")
+                                        .unwrap()
+                                )
+                                .unwrap()
+                        ),
                         name
                     );
                     if matches.len() > 1 {
@@ -2356,10 +2492,14 @@ impl TypeSolver {
                             .iter()
                             .position(|t| t.term == matches.first().unwrap().term)
                             .unwrap();
-                        annotation_infos.remove(index);
+                        anno.remove(index);
                     }
                 }
 
+                let mut sexprs = args
+                    .iter()
+                    .map(|a| to_sexpr(&anno, a, matches.first().copied()))
+                    .collect::<Vec<SExpr>>();
                 sexprs.insert(0, self.smt.atom(var));
                 self.smt.list(sexprs)
             }
@@ -2367,7 +2507,29 @@ impl TypeSolver {
                 let sym = rule.vars[var_id.index()].name;
                 let ident = typeenv.syms[sym.index()].clone();
 
-                self.smt.atom(ident)
+                let mut var = " ".to_string();
+                match parent_term {
+                    Some(value) => match value.var_to_type_var.get(&ident) {
+                        Some(ty) => {
+                            var =
+                                format!("[{}|{}]", type_to_num(type_sols.get(ty).unwrap()), ident);
+                        }
+                        None => {
+                            var = format!(
+                                "[{}|{}]",
+                                type_to_num(
+                                    type_sols
+                                        .get(&value.var_to_type_var.get("arg").unwrap())
+                                        .unwrap()
+                                ),
+                                ident
+                            );
+                        }
+                    },
+                    None => print!("Not found!"),
+                }
+
+                self.smt.atom(var)
             }
             sema::Expr::ConstPrim(_, sym) => {
                 let name = typeenv.syms[sym.index()].clone();
@@ -2384,12 +2546,15 @@ impl TypeSolver {
                     let sym = rule.vars[varid.index()].name;
                     let ident = typeenv.syms[sym.index()].clone();
 
-                    sexprs.push(self.smt.list(vec![self.smt.atom(ident), to_sexpr(expr)]));
+                    sexprs.push(self.smt.list(vec![
+                        self.smt.atom(ident),
+                        to_sexpr(annotation_infos, expr, parent_term),
+                    ]));
                 }
                 self.smt.list(vec![
                     self.smt.atom("let"),
                     self.smt.list(sexprs),
-                    to_sexpr(body),
+                    to_sexpr(annotation_infos, body, parent_term),
                 ])
             }
         }
@@ -2507,23 +2672,32 @@ impl SymbolicType {
 }
 
 fn main() {
-    // Take in an ISLE file name.
-    let args: Vec<String> = env::args().collect();
-    let file_name = &args[1];
+    let args = Args::parse();
+    let mut inputs = vec![];
 
     let cur_dir = env::current_dir().expect("Can't access current working directory");
-    let clif_isle = cur_dir.join("./ref").join("inst_specs.isle");
-    let prelude_isle = cur_dir.join("./ref").join("prelude.isle");
-    let prelude_lower_isle = cur_dir.join("./ref").join("prelude_lower.isle");
-    let mut inputs = vec![prelude_isle, prelude_lower_isle, clif_isle];
+    if !args.noprelude {
+        // Build the relevant ISLE prelude using the meta crate
+        inputs.push(build_clif_lower_isle());
+
+        // TODO: clean up path logic
+        inputs.push(cur_dir.join("./ref").join("inst_specs.isle"));
+        inputs.push(cur_dir.join("./ref").join("prelude.isle"));
+        inputs.push(cur_dir.join("./ref").join("prelude_lower.isle"));
+    }
 
     // DO NOT include these for broken tests
-    // inputs.push(cur_dir.join("./ref/aarch64").join("inst.isle"));
-    // inputs.push(cur_dir.join("./ref/aarch64").join("inst_specs.isle"));
-    // inputs.push(cur_dir.join("./ref/aarch64").join("lower.isle"));
+    if args.aarch64 {
+        inputs.push(cur_dir.join("./ref/aarch64").join("inst.isle"));
+        inputs.push(cur_dir.join("./ref/aarch64").join("inst_specs.isle"));
+        inputs.push(cur_dir.join("./ref/aarch64").join("lower.isle"));
+    }
 
-    inputs.push(build_clif_lower_isle());
-    inputs.push(PathBuf::from(file_name));
+    if let Some(i) = args.input {
+        inputs.push(PathBuf::from(i));
+    } else {
+        panic!("Missing input file in non-aarch64 mode");
+    }
 
     // Parse AST.
     let ast = parse(Lexer::from_files(&inputs).unwrap()).expect("should parse");
@@ -2552,9 +2726,18 @@ fn main() {
     //     .collect::<Vec<_>>();
     // rule_names.dedup();
 
+    let names = if let Some(names) = args.names {
+        let mut names = names;
+        names.sort();
+        names.dedup();
+        Some(names)
+    } else {
+        None
+    };
+
     let config = Config {
-        term: "iadd".to_string(),
-        names: None, //Some(vec!["extend".to_string()]),
+        term: args.term,
+        names: names,
     };
 
     // Get the types/widths for this particular term
@@ -2564,9 +2747,8 @@ fn main() {
         .expect(format!("Missing term width for {}", config.term).as_str())
         .clone();
 
-    // dbg!(&types);
     for type_instantiation in types {
-        let type_sols = type_rules_with_term_and_types(
+        let _type_sols = type_rules_with_term_and_types(
             &termenv,
             &tyenv,
             &annotation_env,
@@ -2575,6 +2757,7 @@ fn main() {
             &None,
         );
 
+        // Old print method:
         //     for rules in &type_sols {
         //         for annotation in &rules.1.annotation_infos {
         //             println!("\nTyping Rule for {}", annotation.term);
