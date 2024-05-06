@@ -2394,38 +2394,6 @@ impl TypeSolver {
             }
         }
     }
-
-    // fn display_term_width(
-    //     &mut self,
-    //     annotation_infos: &Vec<AnnotationTypeInfo>,
-    //     type_sols: &HashMap<u32, veri_ir::annotation_ir::Type>,
-    //     ident: &str,
-    //     prefix: &str,
-    // ) -> String {
-    //     let matches: Vec<&(String, String)> =
-    //         vars.iter().filter(|(v, _)| v.starts_with(prefix)).collect();
-    //     if matches.len() == 0 {
-    //         println!("Can't find match for: {}", prefix);
-    //         println!("{:?}", vars);
-    //         panic!();
-    //     } else if matches.len() == 3 {
-    //         assert!(
-    //             self.dynwidths,
-    //             "Only expect multiple matches with dynamic widths"
-    //         );
-    //         for (name, model) in matches {
-    //             if name.contains("narrow") {
-    //                 return format!("[{}|{}]", self.smt.display(self.smt.atom(ident)), model);
-    //             }
-    //         }
-    //         panic!("narrow not found");
-    //     } else if matches.len() == 1 {
-    //         let model = &matches.first().unwrap().1;
-    //         format!("[{}|{}]", self.smt.display(self.smt.atom(ident)), model)
-    //     } else {
-    //         panic!("Unexpected number of matches!")
-    //     }
-    // }
 }
 
 #[derive(Clone)]
