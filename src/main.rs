@@ -58,7 +58,7 @@ enum TypeExpr {
     WidthInt(u32, u32),
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AnnotationTypeInfo {
     // map of annotation variable to assigned type var
     pub term: String,
@@ -272,8 +272,39 @@ fn type_annotations_using_rule<'a>(
                 &rhs_expr,
                 // Some(&parse_tree.ty_vars),
             );
-            // dbg!(&solution);
-            // dbg!(&bv_unknown_width_sets);
+
+            // Print here?
+            let smt = easy_smt::ContextBuilder::new()
+                .replay_file(Some(std::fs::File::create("type_solver.smt2").unwrap()))
+                .solver("z3", ["-smt2", "-in"])
+                .build()
+                .unwrap();
+
+            let mut solver = TypeSolver::new(smt);
+            let lhs = solver.display_isle_pattern(
+                termenv,
+                typeenv,
+                rule,
+                &mut annotation_infos.clone(),
+                &solution,
+                &Pattern::Term(
+                    cranelift_isle::sema::TypeId(0),
+                    rule.root_term,
+                    rule.args.clone(),
+                ),
+            );
+            println!("{}", solver.smt.display(lhs));
+
+            println!("=>");
+            let rhs = solver.display_isle_expr(
+                termenv,
+                typeenv,
+                rule,
+                &mut annotation_infos.clone(),
+                &solution,
+                &rule.rhs,
+            );
+            println!("{}", solver.smt.display(rhs));
 
             let mut tymap = HashMap::new();
 
@@ -2184,6 +2215,217 @@ impl TypeSolver {
             .or_insert_with(|| SymbolicType::decl(&mut self.smt, v))
             .clone()
     }
+    fn display_isle_pattern(
+        &mut self,
+        termenv: &TermEnv,
+        typeenv: &TypeEnv,
+        rule: &sema::Rule,
+        annotation_infos: &mut Vec<AnnotationTypeInfo>,
+        type_sols: &HashMap<u32, veri_ir::annotation_ir::Type>,
+        pat: &Pattern,
+    ) -> SExpr {
+        let mut to_sexpr =
+            |p| self.display_isle_pattern(termenv, typeenv, rule, annotation_infos, type_sols, p);
+
+        match pat {
+            sema::Pattern::Term(_, term_id, args) => {
+                let sym = termenv.terms[term_id.index()].name;
+                let name = typeenv.syms[sym.index()].clone();
+
+                let mut sexprs: Vec<SExpr> =
+                    args.iter().map(|a| to_sexpr(a)).collect::<Vec<SExpr>>();
+
+                let matches: Vec<&AnnotationTypeInfo> = annotation_infos
+                    .iter()
+                    .filter(|t| t.term.starts_with(&name))
+                    .collect();
+
+                let mut var = "oops".to_string();
+                if matches.len() == 0 {
+                    println!("Can't find match for: {}", name);
+                    panic!();
+                } else if matches.len() >= 1 {
+                    var = format!(
+                        "[{:?}|{}]",
+                        type_sols
+                            .get(
+                                &matches
+                                    .first()
+                                    .unwrap()
+                                    .var_to_type_var
+                                    .get("result")
+                                    .unwrap()
+                            )
+                            .unwrap(),
+                        name
+                    );
+                    if matches.len() > 1 {
+                        let index = annotation_infos
+                            .iter()
+                            .position(|t| t.term == matches.first().unwrap().term)
+                            .unwrap();
+                        annotation_infos.remove(index);
+                    }
+                }
+
+                sexprs.insert(0, self.smt.atom(var));
+                self.smt.list(sexprs)
+            }
+            sema::Pattern::Var(_, var_id) => {
+                let sym = rule.vars[var_id.index()].name;
+                let ident = typeenv.syms[sym.index()].clone();
+
+                self.smt.atom(ident)
+            }
+            sema::Pattern::BindPattern(_, var_id, subpat) => {
+                let sym = rule.vars[var_id.index()].name;
+                let ident = &typeenv.syms[sym.index()];
+                let subpat_node = to_sexpr(subpat);
+
+                // Special case: elide bind patterns to wildcars
+                if matches!(**subpat, sema::Pattern::Wildcard(_)) {
+                    self.smt.atom(ident)
+                } else {
+                    self.smt
+                        .list(vec![self.smt.atom(ident), self.smt.atom("@"), subpat_node])
+                }
+            }
+            sema::Pattern::Wildcard(_) => self.smt.list(vec![self.smt.atom("_")]),
+            sema::Pattern::ConstPrim(_, sym) => {
+                let name = typeenv.syms[sym.index()].clone();
+                self.smt.list(vec![self.smt.atom(name)])
+            }
+            sema::Pattern::ConstInt(_, num) => {
+                let _smt_name_prefix = format!("{}__", num);
+                // TODO: look up BV vs int
+                self.smt.list(vec![self.smt.atom(num.to_string())])
+            }
+            sema::Pattern::And(_, subpats) => {
+                let mut sexprs = subpats.iter().map(|a| to_sexpr(a)).collect::<Vec<SExpr>>();
+
+                sexprs.insert(0, self.smt.atom("and"));
+                self.smt.list(sexprs)
+            }
+        }
+    }
+    fn display_isle_expr(
+        &self,
+        termenv: &TermEnv,
+        typeenv: &TypeEnv,
+        rule: &sema::Rule,
+        annotation_infos: &mut Vec<AnnotationTypeInfo>,
+        type_sols: &HashMap<u32, veri_ir::annotation_ir::Type>,
+        expr: &sema::Expr,
+    ) -> SExpr {
+        let mut to_sexpr =
+            |e| self.display_isle_expr(termenv, typeenv, rule, annotation_infos, type_sols, e);
+
+        match expr {
+            sema::Expr::Term(_, term_id, args) => {
+                let sym = termenv.terms[term_id.index()].name;
+                let name = typeenv.syms[sym.index()].clone();
+
+                let mut sexprs = args.iter().map(|a| to_sexpr(a)).collect::<Vec<SExpr>>();
+
+                let matches: Vec<&AnnotationTypeInfo> = annotation_infos
+                    .iter()
+                    .filter(|t| t.term.starts_with(&name))
+                    .collect();
+
+                let mut var = " ".to_string();
+                if matches.len() == 0 {
+                    println!("Can't find match for: {}", name);
+                    panic!();
+                } else if matches.len() >= 1 {
+                    var = format!(
+                        "[{:?}|{}]",
+                        type_sols
+                            .get(
+                                &matches
+                                    .first()
+                                    .unwrap()
+                                    .var_to_type_var
+                                    .get("result")
+                                    .unwrap()
+                            )
+                            .unwrap(),
+                        name
+                    );
+                    if matches.len() > 1 {
+                        let index = annotation_infos
+                            .iter()
+                            .position(|t| t.term == matches.first().unwrap().term)
+                            .unwrap();
+                        annotation_infos.remove(index);
+                    }
+                }
+
+                sexprs.insert(0, self.smt.atom(var));
+                self.smt.list(sexprs)
+            }
+            sema::Expr::Var(_, var_id) => {
+                let sym = rule.vars[var_id.index()].name;
+                let ident = typeenv.syms[sym.index()].clone();
+
+                self.smt.atom(ident)
+            }
+            sema::Expr::ConstPrim(_, sym) => {
+                let name = typeenv.syms[sym.index()].clone();
+                self.smt.list(vec![self.smt.atom(name)])
+            }
+            sema::Expr::ConstInt(_, num) => {
+                let _smt_name_prefix = format!("{}__", num);
+                // TODO: look up BV vs int
+                self.smt.list(vec![self.smt.atom(num.to_string())])
+            }
+            sema::Expr::Let { bindings, body, .. } => {
+                let mut sexprs = vec![];
+                for (varid, _, expr) in bindings {
+                    let sym = rule.vars[varid.index()].name;
+                    let ident = typeenv.syms[sym.index()].clone();
+
+                    sexprs.push(self.smt.list(vec![self.smt.atom(ident), to_sexpr(expr)]));
+                }
+                self.smt.list(vec![
+                    self.smt.atom("let"),
+                    self.smt.list(sexprs),
+                    to_sexpr(body),
+                ])
+            }
+        }
+    }
+
+    // fn display_term_width(
+    //     &mut self,
+    //     annotation_infos: &Vec<AnnotationTypeInfo>,
+    //     type_sols: &HashMap<u32, veri_ir::annotation_ir::Type>,
+    //     ident: &str,
+    //     prefix: &str,
+    // ) -> String {
+    //     let matches: Vec<&(String, String)> =
+    //         vars.iter().filter(|(v, _)| v.starts_with(prefix)).collect();
+    //     if matches.len() == 0 {
+    //         println!("Can't find match for: {}", prefix);
+    //         println!("{:?}", vars);
+    //         panic!();
+    //     } else if matches.len() == 3 {
+    //         assert!(
+    //             self.dynwidths,
+    //             "Only expect multiple matches with dynamic widths"
+    //         );
+    //         for (name, model) in matches {
+    //             if name.contains("narrow") {
+    //                 return format!("[{}|{}]", self.smt.display(self.smt.atom(ident)), model);
+    //             }
+    //         }
+    //         panic!("narrow not found");
+    //     } else if matches.len() == 1 {
+    //         let model = &matches.first().unwrap().1;
+    //         format!("[{}|{}]", self.smt.display(self.smt.atom(ident)), model)
+    //     } else {
+    //         panic!("Unexpected number of matches!")
+    //     }
+    // }
 }
 
 #[derive(Clone)]
@@ -2296,93 +2538,6 @@ impl SymbolicType {
     }
 }
 
-// fn display_isle_pattern(
-//     termenv: &TermEnv,
-//     typeenv: &TypeEnv,
-//     vars: &Vec<(String, String)>,
-//     rule: &sema::Rule,
-//     pat: &Pattern,
-// ) -> SExpr {
-//     let mut to_sexpr = |p| display_isle_pattern(termenv, typeenv, vars, rule, p);
-
-//     match pat {
-//         sema::Pattern::Term(_, term_id, args) => {
-//             let sym = termenv.terms[term_id.index()].name;
-//             let name = typeenv.syms[sym.index()].clone();
-
-//             let mut sexprs = args.iter().map(|a| to_sexpr(a)).collect::<Vec<SExpr>>();
-
-//             sexprs.insert(0, self.smt.atom(name));
-//             self.smt.list(sexprs)
-//         }
-//         sema::Pattern::Var(_, var_id) => {
-//             let sym = rule.vars[var_id.index()].name;
-//             let ident = typeenv.syms[sym.index()].clone();
-//             let smt_ident_prefix = format!("{}__clif{}__", ident, var_id.index());
-
-//             let var = display_var_from_smt_prefix(vars, &ident, &smt_ident_prefix);
-//             self.smt.atom(var)
-//         }
-//         sema::Pattern::BindPattern(_, var_id, subpat) => {
-//             let sym = rule.vars[var_id.index()].name;
-//             let ident = &typeenv.syms[sym.index()];
-//             let smt_ident_prefix = format!("{}__clif{}__", ident, var_id.index(),);
-//             let subpat_node = to_sexpr(subpat);
-
-//             let var = display_var_from_smt_prefix(vars, ident, &smt_ident_prefix);
-
-//             // Special case: elide bind patterns to wildcars
-//             if matches!(**subpat, sema::Pattern::Wildcard(_)) {
-//                 self.smt.atom(var)
-//             } else {
-//                 self.smt
-//                     .list(vec![self.smt.atom(var), self.smt.atom("@"), subpat_node])
-//             }
-//         }
-//         sema::Pattern::Wildcard(_) => self.smt.list(vec![self.smt.atom("_")]),
-//         sema::Pattern::ConstPrim(_, sym) => {
-//             let name = typeenv.syms[sym.index()].clone();
-//             self.smt.list(vec![self.smt.atom(name)])
-//         }
-//         sema::Pattern::ConstInt(_, num) => {
-//             let _smt_name_prefix = format!("{}__", num);
-//             // TODO: look up BV vs int
-//             self.smt.list(vec![self.smt.atom(num.to_string())])
-//         }
-//         sema::Pattern::And(_, subpats) => {
-//             let mut sexprs = subpats.iter().map(|a| to_sexpr(a)).collect::<Vec<SExpr>>();
-
-//             sexprs.insert(0, self.smt.atom("and"));
-//             self.smt.list(sexprs)
-//         }
-//     }
-// }
-
-// fn display_var_from_smt_prefix(vars: &Vec<(String, String)>, ident: &str, prefix: &str) -> String {
-//     let matches: Vec<&(String, String)> =
-//         vars.iter().filter(|(v, _)| v.starts_with(prefix)).collect();
-//     if matches.len() == 0 {
-//         println!("Can't find match for: {}", prefix);
-//         println!("{:?}", vars);
-//         panic!();
-//     } else if matches.len() == 3 {
-//         assert!(
-//             self.dynwidths,
-//             "Only expect multiple matches with dynamic widths"
-//         );
-//         for (name, model) in matches {
-//             if name.contains("narrow") {
-//                 return format!("[{}|{}]", self.smt.display(self.smt.atom(ident)), model);
-//             }
-//         }
-//         panic!("narrow not found");
-//     } else if matches.len() == 1 {
-//         let model = &matches.first().unwrap().1;
-//         format!("[{}|{}]", self.smt.display(self.smt.atom(ident)), model)
-//     } else {
-//         panic!("Unexpected number of matches!")
-//     }
-// }
 fn main() {
     // Take in an ISLE file name.
     let args: Vec<String> = env::args().collect();
@@ -2430,7 +2585,7 @@ fn main() {
     // rule_names.dedup();
 
     let config = Config {
-        term: "uextend".to_string(),
+        term: "iadd".to_string(),
         names: None, //Some(vec!["extend".to_string()]),
     };
 
@@ -2452,17 +2607,17 @@ fn main() {
             &None,
         );
 
-        for rules in &type_sols {
-            for annotation in &rules.1.annotation_infos {
-                println!("\nTyping Rule for {}", annotation.term);
-                for var in &annotation.var_to_type_var {
-                    println!(
-                        "{}: {:?}",
-                        var.0,
-                        rules.1.type_var_to_type.get(var.1).unwrap()
-                    );
-                }
-            }
-        }
+        //     for rules in &type_sols {
+        //         for annotation in &rules.1.annotation_infos {
+        //             println!("\nTyping Rule for {}", annotation.term);
+        //             for var in &annotation.var_to_type_var {
+        //                 println!(
+        //                     "{}: {:?}",
+        //                     var.0,
+        //                     rules.1.type_var_to_type.get(var.1).unwrap()
+        //                 );
+        //             }
+        //         }
+        //     }
     }
 }

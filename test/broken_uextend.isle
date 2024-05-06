@@ -304,3 +304,14 @@
 ;; integrated
 ;; more tests
 ;; send Alexa rules 
+;; in solver.rs, there is some part that prints counter examples
+
+;;  concat -- numeric constraint
+
+;; look at broken_shift.isle
+;; -- concat example
+
+
+;; check if form is making a difference
+
+;; widthOf

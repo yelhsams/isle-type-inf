@@ -11,6 +11,7 @@
 (rule (A x y) x)
 (rule (A 0 _) 0)
 
+00001010101001
 ;; (32, 64) -> 32
 
 ;; Harder test cases :: veri engine -- broken, 'extend', small_rotr
