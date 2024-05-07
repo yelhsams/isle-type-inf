@@ -1585,14 +1585,6 @@ fn add_annotation_constraints(
             let t = tree.next_type_var;
             tree.next_type_var += 1;
 
-            // let widths: Vec<SExpr> = xs
-            //     .iter()
-            //     .map(|x| self.get_expr_width_var(&x).unwrap().clone())
-            //     .collect();
-            // let sum = self.smt.plus_many(widths);
-            // self.width_assumptions
-            //     .push(self.smt.eq(width.unwrap(), sum));
-
             let mut sum_bvs = vec![];
 
             let mut exprs = vec![];
