@@ -322,7 +322,7 @@
 (extern constructor ty_smax ty_smax)
 
 ;; Get the bit width of a given type.
-(spec (ty_bits x) (provide (= result (int2bv 8 x))))
+(spec (ty_bits arg) (provide (= result (int2bv 8 arg))))
 (decl pure ty_bits (Type) u8)
 (extern constructor ty_bits ty_bits)
 

@@ -15,3 +15,5 @@ easy-smt = { git = "https://github.com/elliottt/easy-smt.git" }
 itertools = "0.12.1"
 strum = "0.26.2"
 strum_macros = "0.26.2"
+clap = { version = "4.5.0", features = ["derive"] }
+clap_derive = { version = "4.0.0-rc.1" }
