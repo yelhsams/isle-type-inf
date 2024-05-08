@@ -4,7 +4,7 @@ By Ashley Sheng (CS340)
 
 [Self Link to GitHub Repository](https://github.com/yelhsams/isle-type-inf)
 
-## Motivation
+## Background/Motivating Problem
 
 This project is inspired by this [issue](https://github.com/avanhatt/wasmtime/issues/91), reported by @mmcloughlin. Currently, ISLE implements a [simple unidirectional type-inference algorithm](https://github.com/bytecodealliance/wasmtime/blob/main/cranelift/isle/docs/language-reference.md#well-typed-rules-and-type-inference), which typechecks a pattern by propagating expected types provided by the constructor. At this point, the widths of each bitvector may not be known, since types in ISLE are polymorphic. 
 
@@ -33,12 +33,29 @@ Target Goal:
 Stretch Goal:
 * Integrate changes with the existing codebase.
 
+## Installation 
+* Fork this repository from Github. All dependencies should be installed by Rust at runtime.
+
+## Run (Testable Examples)
+There are three testable examples: 
+1) `bounded_var.isle` for a simple rule involving `instantiate` and `Value`
+> Run this command: `cargo run --bin type-inf -- --aarch64 -t A -i /Users/ashleysheng/cs340/isle-type-inf/test/bound_var.isle`
+2) `broken_shift.isle` for a more complex rule involving `ishl`.
+> Run this command: `cargo run --bin type-inf -- -t iadd -i /Users/ashleysheng/cs340/isle-type-inf/test/broken_shift.isle` 
+3) `broken_uextend.isle` for a rule modeling `uextend`
+> Run this command: `cargo run --bin type-inf -- -t uextend -i /Users/ashleysheng/cs340/isle-type-inf/test/broken_uextend.isle`
+
+
+## Tradeoffs
+One major compromise I made for the sake of time, is not removing the `annotation_ir` representations, and not utilizing the existing code in `solver.rs` that extracted dynamic constraints from `veri_ir` to a greater degree. This would also make integrating existing logic from the dynamic widths solver into the new integrated/unified type inference system easier. This would be a future goal.
+
+
+I had attempted to make a second pass over the annotations and parse the rule in `veri_ir` for additional symbolic constraints, but this would defeat the purpose of the project.
+
+A scope assumption would be that dynamic type inference only currently applies to `BVConcat`. Right now, static inferences are handled by the SMT solver, but not all dynamic cases are solvable currently. For now, I’ve only handled symbolic sums of bitvector widths, but I would like to extend my approach to handle more cases.
+
+Efforts to integrate my changes into the existing codebase have begun: [yelhsams:integrate-type-inf](https://github.com/wellesley-prog-sys/wasmtime/pull/1). While there are incompatibilities and bugs in the `display` functions, the new Type Constraints are propagated to the SMT solver.
+
 ## Sources
 * [Pardeshi 2023. VeriISLE: Verifying Instruction Selection in Cranelift](http://reports-archive.adm.cs.cmu.edu/anon/2023/CMU-CS-23-126.pdf)
-
-
-
-We need to keep track of three types of constraints/nodes:
- concrete (constant), var, bitvectors
-
- This is because Constraints either assign concrete types to type variables or set them equal to other type variables
+* [Michael's Code](https://github.com/avanhatt/wasmtime/issues/91)

@@ -1581,7 +1581,6 @@ fn add_annotation_constraints(
             (veri_ir::Expr::BVExtract(l, r, Box::new(e1)), t)
         }
         annotation_ir::Expr::BVConcat(xs) => {
-            // AVH todo: doesn't sum the various widths, has to be done in the solver
             let t = tree.next_type_var;
             tree.next_type_var += 1;
 
